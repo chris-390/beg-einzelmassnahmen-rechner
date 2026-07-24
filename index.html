@@ -375,7 +375,9 @@
       <table id="breakdown-table"></table>
     </div>
 
-    <a href="https://ing-kaufmann.de" target="_blank" class="cta">Jetzt kostenlose Erstberatung vereinbaren →</a>
+    <button class="cta" id="pdf-btn" style="border:none;cursor:pointer;width:100%;" onclick="exportPDF()">📄 Ergebnis als PDF herunterladen</button>
+
+    <a href="https://ing-kaufmann.de" target="_blank" class="cta" style="background:transparent;color:var(--ci-blue);border:1.5px solid var(--ci-blue);">Jetzt kostenlose Erstberatung vereinbaren →</a>
 
   </main>
 
@@ -387,6 +389,7 @@
 
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
 /* ============================================================
    BEG EM – alle Einzelmaßnahmen-Kategorien ab 21.07.2026
@@ -475,6 +478,8 @@ function berechneMitISFPKorridor(ausgaben, basissatz, weGesamt, isfp, zusatzVoll
 }
 
 let weGesamt = 1;
+let letzteBerechnung = null; // für PDF-Export
+
 function step(delta) {
   weGesamt = Math.max(1, weGesamt + delta);
   document.getElementById('weGesamt-display').textContent = weGesamt;
@@ -494,6 +499,11 @@ function berechnen() {
   let gesamtFoerderung = 0;
   let gesamtAusgaben = 0;
   let rows = [];
+  let eingaben = [];
+
+  eingaben.push(['Wohneinheiten gesamt', String(weGesamt)]);
+  eingaben.push(['Geplantes Antragsdatum', datum ? new Date(datum).toLocaleDateString('de-DE') : '–']);
+  eingaben.push(['Individueller Sanierungsfahrplan (iSFP)', isfp ? 'Ja' : 'Nein']);
 
   // --- Gebäudehülle ---
   if (document.getElementById('gh-aktiv').checked) {
@@ -506,6 +516,8 @@ function berechnen() {
     rows.push(['head', 'Gebäudehülle', fmtEUR(r.betrag)]);
     rows.push(['sub', 'Ausgaben / förderfähig (Höchstgrenze ' + fmtEUR(r.cap) + ')', fmtEUR(ausgaben) + ' / ' + fmtEUR(r.foerderfaehig)]);
     if (r.isfpAktiv) rows.push(['sub', 'davon im iSFP-Korridor (+5 %)', fmtEUR(r.ueberschussAnteil)]);
+    eingaben.push(['Gebäudehülle – Ausgaben', fmtEUR(ausgaben)]);
+    eingaben.push(['Gebäudehülle – WPB-Bonus', wpb ? 'Ja' : 'Nein']);
   } else {
     document.getElementById('gh-result').textContent = '–';
   }
@@ -520,6 +532,7 @@ function berechnen() {
     rows.push(['head', 'Anlagentechnik', fmtEUR(r.betrag)]);
     rows.push(['sub', 'Ausgaben / förderfähig (Höchstgrenze ' + fmtEUR(r.cap) + ')', fmtEUR(ausgaben) + ' / ' + fmtEUR(r.foerderfaehig)]);
     if (r.isfpAktiv) rows.push(['sub', 'davon im iSFP-Korridor (+5 %)', fmtEUR(r.ueberschussAnteil)]);
+    eingaben.push(['Anlagentechnik – Ausgaben', fmtEUR(ausgaben)]);
   } else {
     document.getElementById('at-result').textContent = '–';
   }
@@ -563,6 +576,14 @@ function berechnen() {
     if (selbstgenutzt) {
       rows.push(['sub', 'Fördersatz selbstgenutzte WE' + (gekappt ? ' (auf ' + fmtPct(cappingGrenze) + ' gekappt)' : ''), fmtPct(rateSelbst)]);
     }
+    const techLabel = document.getElementById('hz-technologie').options[document.getElementById('hz-technologie').selectedIndex].text;
+    const einkommenLabel = document.getElementById('hz-einkommen').options[document.getElementById('hz-einkommen').selectedIndex].text;
+    eingaben.push(['Heizung – Ausgaben', fmtEUR(ausgaben)]);
+    eingaben.push(['Heizung – Technologie', techLabel]);
+    eingaben.push(['Heizung – erste WE selbstgenutzt', selbstgenutzt ? 'Ja' : 'Nein']);
+    eingaben.push(['Heizung – Haushaltseinkommen', einkommenLabel]);
+    eingaben.push(['Heizung – Kinder im Haushalt', kinder ? 'Ja' : 'Nein']);
+    eingaben.push(['Heizung – Klimageschwindigkeitsbonus', klimaAktiv ? 'Ja' : 'Nein']);
   } else {
     document.getElementById('hz-result').textContent = '–';
   }
@@ -585,6 +606,8 @@ function berechnen() {
     document.getElementById('ho-result').textContent = 'Förderung: ' + fmtEUR(betrag);
     rows.push(['head', 'Heizungsoptimierung', fmtEUR(betrag)]);
     rows.push(['sub', 'Ausgaben / förderfähig (Höchstgrenze ' + fmtEUR(cap) + ')', fmtEUR(ausgaben) + ' / ' + fmtEUR(foerderfaehig)]);
+    eingaben.push(['Heizungsoptimierung – Ausgaben', fmtEUR(ausgaben)]);
+    eingaben.push(['Heizungsoptimierung – Variante', document.getElementById('ho-variante').options[document.getElementById('ho-variante').selectedIndex].text]);
   } else {
     document.getElementById('ho-result').textContent = '–';
   }
@@ -600,6 +623,7 @@ function berechnen() {
     document.getElementById('fp-result').textContent = 'Förderung: ' + fmtEUR(betrag);
     rows.push(['head', 'Fachplanung/Baubegleitung', fmtEUR(betrag)]);
     rows.push(['sub', 'Ausgaben / förderfähig (Höchstgrenze ' + fmtEUR(cap) + ')', fmtEUR(ausgaben) + ' / ' + fmtEUR(foerderfaehig)]);
+    eingaben.push(['Fachplanung/Baubegleitung – Ausgaben', fmtEUR(ausgaben)]);
   } else {
     document.getElementById('fp-result').textContent = '–';
   }
@@ -618,12 +642,219 @@ function berechnen() {
   } else {
     bBox.style.display = 'none';
   }
+
+  letzteBerechnung = {
+    datum, weGesamt, isfp, gesamtFoerderung, gesamtAusgaben,
+    eingaben,
+    rows: rows.filter(r => r[0] !== 'sub' || true) // alle Zeilen inkl. Detailzeilen
+  };
 }
 
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('weGesamt-display').textContent = weGesamt;
   berechnen();
 });
+
+/* ---------------- PDF-Export ---------------- */
+function logoAlsDataURL() {
+  return new Promise((resolve) => {
+    try {
+      const imgEl = document.querySelector('.logobox img');
+      if (!imgEl) { resolve(null); return; }
+      const canvas = document.createElement('canvas');
+      const draw = () => {
+        try {
+          canvas.width = imgEl.naturalWidth || 400;
+          canvas.height = imgEl.naturalHeight || 250;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(imgEl, 0, 0);
+          resolve({ data: canvas.toDataURL('image/jpeg', 0.92), ratio: canvas.width / canvas.height });
+        } catch (e) { resolve(null); }
+      };
+      if (imgEl.complete && imgEl.naturalWidth) draw();
+      else { imgEl.onload = draw; imgEl.onerror = () => resolve(null); }
+      setTimeout(() => resolve(null), 3000); // Sicherheitsnetz, falls onload nie feuert
+    } catch (e) { resolve(null); }
+  });
+}
+
+async function exportPDF() {
+  if (!letzteBerechnung || letzteBerechnung.gesamtAusgaben <= 0) {
+    alert('Bitte zuerst mindestens eine Maßnahmenkategorie mit Ausgaben ausfüllen.');
+    return;
+  }
+  const btn = document.getElementById('pdf-btn');
+  const btnTextOriginal = btn.textContent;
+  btn.textContent = 'PDF wird erstellt …';
+  btn.disabled = true;
+
+  try {
+    if (!window.jspdf || !window.jspdf.jsPDF) {
+      throw new Error('PDF-Bibliothek konnte nicht geladen werden (evtl. Werbe-/Script-Blocker oder keine Internetverbindung zum CDN).');
+    }
+    const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const pageW = 210, marginX = 18;
+  const ciBlue = [2, 70, 101];
+  const ciTeal = [0, 171, 132];
+  const ink = [31, 42, 51];
+  const inkMid = [107, 118, 128];
+
+  // Kopfbalken
+  doc.setFillColor(...ciBlue);
+  doc.rect(0, 0, pageW, 30, 'F');
+  doc.setFillColor(...ciTeal);
+  doc.rect(0, 30, pageW, 1.4, 'F');
+
+  const logo = await logoAlsDataURL();
+  if (logo) {
+    const logoH = 14, logoW = logoH * logo.ratio;
+    doc.setFillColor(255, 255, 255);
+    doc.roundedRect(marginX, 8, logoW + 6, logoH + 6, 1.5, 1.5, 'F');
+    doc.addImage(logo.data, 'JPEG', marginX + 3, 11, logoW, logoH);
+  }
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  doc.text('Ingenieurbüro Kaufmann', pageW - marginX, 14, { align: 'right' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.text('BEG-Einzelmaßnahmen-Rechner · Ergebnis', pageW - marginX, 21, { align: 'right' });
+
+  let y = 42;
+  const heute = new Date().toLocaleDateString('de-DE');
+  const colValX = pageW - marginX;
+  doc.setTextColor(...ink);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12);
+  doc.text('Förderschätzung BEG Einzelmaßnahmen', marginX, y);
+  y += 6;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(...inkMid);
+  doc.text('Erstellt am: ' + heute, marginX, y);
+  y += 9;
+
+  // ---- Eingaben-Box ----
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10.5);
+  doc.setTextColor(...ciBlue);
+  doc.text('Erfasste Eingaben', marginX, y);
+  y += 2;
+  doc.setDrawColor(...ciTeal);
+  doc.setLineWidth(0.6);
+  doc.line(marginX, y, marginX + 40, y);
+  doc.setLineWidth(0.2);
+  y += 6;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  const colGap = (colValX - marginX) / 2;
+  letzteBerechnung.eingaben.forEach(([label, value], idx) => {
+    if (y > 270) { doc.addPage(); y = 20; }
+    doc.setTextColor(...inkMid);
+    const labelLines = doc.splitTextToSize(label, colGap - 32);
+    doc.text(labelLines, marginX, y);
+    doc.setTextColor(...ink);
+    doc.setFont('helvetica', 'bold');
+    doc.text(String(value), marginX + colGap - 30, y);
+    doc.setFont('helvetica', 'normal');
+    y += 4.6 * labelLines.length;
+  });
+  y += 4;
+  doc.setDrawColor(217, 221, 224);
+  doc.line(marginX, y, colValX, y);
+  y += 8;
+
+  // ---- Förderberechnung ----
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10.5);
+  doc.setTextColor(...ciBlue);
+  doc.text('Förderberechnung je Maßnahmenkategorie', marginX, y);
+  y += 2;
+  doc.setDrawColor(...ciTeal);
+  doc.setLineWidth(0.6);
+  doc.line(marginX, y, marginX + 62, y);
+  doc.setLineWidth(0.2);
+  y += 7;
+
+  // Tabelle
+  doc.setDrawColor(217, 221, 224);
+
+  letzteBerechnung.rows.forEach(([cls, label, value]) => {
+    if (y > 265) { doc.addPage(); y = 20; }
+    if (cls === 'head') {
+      y += 3;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10.5);
+      doc.setTextColor(...ciBlue);
+      doc.text(label, marginX, y);
+      doc.text(value, colValX, y, { align: 'right' });
+      y += 2;
+      doc.setDrawColor(...ciBlue);
+      doc.line(marginX, y, colValX, y);
+      y += 5;
+    } else if (cls === 'sub') {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.7);
+      doc.setTextColor(...inkMid);
+      const labelLines = doc.splitTextToSize(label, 118);
+      doc.text(labelLines, marginX + 2, y);
+      doc.text(value, colValX, y, { align: 'right' });
+      y += 4.6 * labelLines.length;
+    } else if (cls === 'total') {
+      y += 3;
+      doc.setDrawColor(...ciBlue);
+      doc.setLineWidth(0.6);
+      doc.line(marginX, y, colValX, y);
+      doc.setLineWidth(0.2);
+      y += 7;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(13);
+      doc.setTextColor(...ciTeal);
+      doc.text(label, marginX, y);
+      doc.text(value, colValX, y, { align: 'right' });
+      y += 8;
+    }
+  });
+
+  // Ergebnisbox
+  doc.setFillColor(...ciBlue);
+  doc.roundedRect(marginX, y, colValX - marginX, 20, 2, 2, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.text('GESAMTFÖRDERBETRAG', marginX + 6, y + 7);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(16);
+  doc.text(fmtEUR(letzteBerechnung.gesamtFoerderung), marginX + 6, y + 15.5);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  const quote = (letzteBerechnung.gesamtFoerderung / letzteBerechnung.gesamtAusgaben * 100).toLocaleString('de-DE', { maximumFractionDigits: 1 });
+  doc.text('bei ' + fmtEUR(letzteBerechnung.gesamtAusgaben) + ' Ausgaben  ·  Ø ' + quote + ' %', colValX - 6, y + 12, { align: 'right' });
+
+  // Fußzeile
+  const footerY = 282;
+  doc.setDrawColor(217, 221, 224);
+  doc.line(marginX, footerY - 6, colValX, footerY - 6);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.3);
+  doc.setTextColor(...inkMid);
+  doc.text('Unverbindliche Schätzung nach der BEG-EM-Förderrichtlinie ab 21.07.2026. Maßgeblich sind die jeweils gültigen', marginX, footerY - 1);
+  doc.text('Förderrichtlinien und die Prüfung im Einzelfall.', marginX, footerY + 3);
+  doc.text('Ingenieurbüro Kaufmann · Christian Kaufmann · Ringstraße 10A · 97903 Collenberg · info@ing-kaufmann.de · 0162 / 72 22 043', marginX, footerY + 8);
+
+  doc.save('BEG-Foerderschaetzung_' + heute.replaceAll('.', '-') + '.pdf');
+
+  } catch (err) {
+    console.error('PDF-Export fehlgeschlagen:', err);
+    alert('Das PDF konnte leider nicht erstellt werden.\n\nFehlermeldung: ' + (err && err.message ? err.message : err));
+  } finally {
+    btn.textContent = btnTextOriginal;
+    btn.disabled = false;
+  }
+}
+
 </script>
 </body>
 </html>
